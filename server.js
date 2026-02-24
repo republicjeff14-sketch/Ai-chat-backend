@@ -127,9 +127,7 @@ app.post("/chat", async (req, res) => {
       return res.status(400).json({ error: "message required" });
     }
 
-    const systemPrompt =
-      client.systemPrompt ||
-      "You are a helpful website assistant. Answer clearly and concisely.";
+  
 
    const systemPrompt = `${client.promptBase}\n\n${client.promptClient}`;
 
