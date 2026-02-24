@@ -131,10 +131,21 @@ app.post("/chat", async (req, res) => {
       client.systemPrompt ||
       "You are a helpful website assistant. Answer clearly and concisely.";
 
-    const response = await openai.responses.create({
-      model: client.model || "gpt-4.1-mini",
-      input: `${systemPrompt}\nUser: ${message}`,
-    });
+   const systemPrompt = `${client.promptBase}\n\n${client.promptClient}`;
+
+const response = await openai.responses.create({
+  model: client.model || "gpt-4.1-mini",
+  input: [
+    {
+      role: "system",
+      content: systemPrompt
+    },
+    {
+      role: "user",
+      content: message
+    }
+  ]
+});
 
     const reply = response.output_text || "";
 
