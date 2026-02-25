@@ -24,6 +24,10 @@ function loadClients() {
   const parsed = JSON.parse(raw);
   const map = new Map();
   for (const c of parsed.clients || []) map.set(c.clientId, c);
+  console.log("Loaded clients:");
+  for (const [id, client] of map.entries()) {
+    console.log(id, client.allowedOrigins);
+  }
   return map;
 }
 
