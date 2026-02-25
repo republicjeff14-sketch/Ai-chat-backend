@@ -202,15 +202,7 @@ bubbleClose.addEventListener("click", () => {
     panel.style.display = "none";
   });
   
-btn.addEventListener("click", () => {
-  if (localStorage.getItem("aiw_hidden") === "1") return;
-  panel.style.display = panel.style.display === "none" ? "block" : "none";
-});
 
-panel.querySelector("#aiw-close").addEventListener("click", () => {
-  panel.style.display = "none";
-  localStorage.setItem("aiw_hidden", "1");
-});
 
   panel.querySelector("#aiw-form").addEventListener("submit", async (e) => {
     e.preventDefault();
