@@ -101,6 +101,27 @@
   btn.type = "button";
   btn.id = "aiw-btn";
   btn.textContent = "💬";
+  // Create small dismiss X for bubble
+const bubbleClose = document.createElement("button");
+bubbleClose.textContent = "×";
+bubbleClose.style.position = "fixed";
+bubbleClose.style.right = "14px";
+bubbleClose.style.bottom = "74px";
+bubbleClose.style.width = "20px";
+bubbleClose.style.height = "20px";
+bubbleClose.style.borderRadius = "50%";
+bubbleClose.style.border = "none";
+bubbleClose.style.cursor = "pointer";
+bubbleClose.style.fontSize = "14px";
+bubbleClose.style.background = "#000";
+bubbleClose.style.color = "#fff";
+bubbleClose.style.zIndex = "999999";
+
+bubbleClose.addEventListener("click", () => {
+  btn.style.display = "none";
+  panel.style.display = "none";
+  bubbleClose.style.display = "none";
+});
 
   const panel = document.createElement("div");
   panel.id = "aiw-panel";
@@ -130,6 +151,7 @@
 
   root.appendChild(btn);
   root.appendChild(panel);
+  root.appendChild(bubbleClose);
   document.body.appendChild(root);
 
   const body = panel.querySelector("#aiw-body");
@@ -179,6 +201,16 @@
   panel.querySelector("#aiw-close").addEventListener("click", () => {
     panel.style.display = "none";
   });
+  
+btn.addEventListener("click", () => {
+  if (localStorage.getItem("aiw_hidden") === "1") return;
+  panel.style.display = panel.style.display === "none" ? "block" : "none";
+});
+
+panel.querySelector("#aiw-close").addEventListener("click", () => {
+  panel.style.display = "none";
+  localStorage.setItem("aiw_hidden", "1");
+});
 
   panel.querySelector("#aiw-form").addEventListener("submit", async (e) => {
     e.preventDefault();
