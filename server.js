@@ -201,4 +201,9 @@ const response = await openai.responses.create({
 });
 
 const PORT = process.env.PORT || 3001;
+app.get("/", (req, res) => {
+  res.type("text").send(
+    "AI Chat Backend is running ✅\n\nTry:\n/health\n/widget.js"
+  );
+});
 app.listen(PORT, () => console.log(`Server running on http://localhost:${PORT}`));
