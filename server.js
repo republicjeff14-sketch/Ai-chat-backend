@@ -5,7 +5,13 @@ import OpenAI from "openai";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
+import pg from "pg";
+const { Pool } = pg;
 
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false }
+});
 const app = express();
 app.use(express.json({ limit: "50kb" }));
 
@@ -30,6 +36,21 @@ function loadClients() {
   }
   return map;
 }
+
+function detectLeadIntent(text) {
+  return /(quote|estimate|pricing|price|book|booking|appointment|schedule|contact|call me|reach out|get in touch)/i.test(text);
+}
+
+function extractEmail(text) {
+  const m = text.match(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/i);
+  return m ? m[0] : null;
+}
+
+function extractPhone(text) {
+  const m = text.match(/(\+?1[\s.-]?)?\(?\d{3}\)?[\s.-]?\d{3}[\s.-]?\d{4}/);
+  return m ? m[0] : null;
+}
+
 
 let CLIENTS = loadClients();
 fs.watchFile(CLIENTS_PATH, { interval: 500 }, () => {
@@ -115,6 +136,19 @@ app.post("/chat", async (req, res) => {
   const started = Date.now();
   try {
     const { clientId, message } = req.body;
+
+    const email = extractEmail(message);
+const phone = extractPhone(message);
+const leadIntent = detectLeadIntent(message);
+
+// Store a lead if we detected contact info OR they are clearly trying to buy/contact
+if (email || phone || leadIntent) {
+  await pool.query(
+    `insert into leads (client_id, email, phone, message, page_url)
+     values ($1, $2, $3, $4, $5)`,
+    [clientId, email, phone, message, pageUrl || null]
+  );
+}
 
     const { client, error, status } = getClientOrThrow(clientId);
     if (error) return res.status(status).json({ error });

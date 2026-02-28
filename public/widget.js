@@ -218,7 +218,7 @@ bubbleClose.addEventListener("click", () => {
       const res = await fetch(CHAT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId, message: msg }),
+        body: JSON.stringify({ clientId, message: msg, pageUrl: location.href }),
       });
 
       const data = await res.json();
