@@ -135,7 +135,7 @@ app.get("/client-config", (req, res) => {
 app.post("/chat", async (req, res) => {
   const started = Date.now();
   try {
-    const { clientId, message } = req.body;
+    const { clientId, message, pageUrl } = req.body;
 
     const email = extractEmail(message);
 const phone = extractPhone(message);
