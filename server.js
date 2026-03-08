@@ -51,6 +51,65 @@ function extractPhone(text) {
   return m ? m[0] : null;
 }
 
+function safeJsonParse(text) {
+  try {
+    return JSON.parse(text);
+  } catch {
+    return null;
+  }
+}
+async function classifyLead(openai, client, message) {
+  const classifierPrompt = `
+You are a lead-capture classifier for a business website chat widget.
+
+Your job:
+1. Decide if the user's message indicates sales/contact intent.
+2. Extract any lead information already present.
+3. Decide what missing information should be asked next.
+
+Return ONLY valid JSON.
+No markdown.
+No explanation.
+
+JSON shape:
+{
+  "isLead": boolean,
+  "leadType": "quote_request" | "booking_request" | "pricing_question" | "general_contact" | "none",
+  "name": string | null,
+  "phone": string | null,
+  "email": string | null,
+  "notes": string | null,
+  "shouldAskFollowup": boolean,
+  "followupQuestion": string | null
+}
+
+Rules:
+- isLead should be true if the user wants pricing, a quote, a booking, a consultation, to be contacted, or shows buying intent.
+- Extract name if the user says things like "my name is..." or "I'm ..."
+- Extract phone if present.
+- Extract email if present.
+- notes should briefly summarize what they want.
+- If isLead is true and phone/email is missing, shouldAskFollowup should usually be true.
+- followupQuestion should be short, natural, and ask only for the missing info.
+- If enough contact info is already present, shouldAskFollowup should be false.
+`;
+
+  const result = await openai.responses.create({
+    model: "gpt-4.1-mini",
+    input: [
+      {
+        role: "system",
+        content: classifierPrompt
+      },
+      {
+        role: "user",
+        content: message
+      }
+    ]
+  });
+
+  return safeJsonParse(result.output_text);
+}
 
 let CLIENTS = loadClients();
 fs.watchFile(CLIENTS_PATH, { interval: 500 }, () => {
@@ -137,19 +196,6 @@ app.post("/chat", async (req, res) => {
   try {
     const { clientId, message, pageUrl } = req.body;
 
-    const email = extractEmail(message);
-const phone = extractPhone(message);
-const leadIntent = detectLeadIntent(message);
-
-// Store a lead if we detected contact info OR they are clearly trying to buy/contact
-if (email || phone || leadIntent) {
-  await pool.query(
-    `insert into leads (client_id, email, phone, message, page_url)
-     values ($1, $2, $3, $4, $5)`,
-    [clientId, email, phone, message, pageUrl || null]
-  );
-}
-
     const { client, error, status } = getClientOrThrow(clientId);
     if (error) return res.status(status).json({ error });
 
@@ -164,7 +210,47 @@ if (email || phone || leadIntent) {
     if (!message || typeof message !== "string") {
       return res.status(400).json({ error: "message required" });
     }
+let leadData = null;
 
+try {
+  leadData = await classifyLead(openai, client, message);
+} catch (e) {
+  console.error("Lead classifier failed:", e.message);
+}
+
+if (leadData?.isLead) {
+  const fallbackPhone = extractPhone(message);
+  const fallbackEmail = extractEmail(message);
+
+  const name = leadData.name || null;
+  const phone = leadData.phone || fallbackPhone || null;
+  const email = leadData.email || fallbackEmail || null;
+  const notes = leadData.notes || message;
+
+  try {
+    await pool.query(
+      `insert into leads (client_id, name, email, phone, message, page_url)
+       values ($1, $2, $3, $4, $5, $6)`,
+      [clientId, name, email, phone, notes, pageUrl || null]
+    );
+  } catch (e) {
+    console.error("Lead insert failed:", e.message);
+  }
+
+  if (leadData.shouldAskFollowup) {
+    return res.json({
+      reply:
+        leadData.followupQuestion ||
+        "Sure — could you share your name and best phone number so our team can follow up?"
+    });
+  }
+
+  return res.json({
+    reply: name
+      ? `Thanks ${name}! Someone from our team will reach out shortly.`
+      : "Thanks! Someone from our team will reach out shortly."
+  });
+}
   
 
    const systemPrompt = `${client.promptBase}\n\n${client.promptClient}`;
