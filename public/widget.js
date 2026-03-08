@@ -7,16 +7,27 @@
   const CHAT_URL = `${API_BASE}/chat`;
   const CONFIG_URL = `${API_BASE}/client-config?clientId=${encodeURIComponent(clientId)}`;
 
-  // Defaults (in case config fetch fails)
+  const STORAGE_KEY = `aiw_session_${clientId}`;
+
+  function getSessionId() {
+    let id = localStorage.getItem(STORAGE_KEY);
+    if (!id) {
+      id = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+      localStorage.setItem(STORAGE_KEY, id);
+    }
+    return id;
+  }
+
+  const sessionId = getSessionId();
+
   let ui = {
     title: "Chat",
     subtitle: "Automated assistant",
     greeting: "Hi! How can I help?",
     accent: "#111111",
-    accentText: "#ffffff",
+    accentText: "#ffffff"
   };
 
-  // --- styles ---
   const style = document.createElement("style");
   style.textContent = `
   #aiw-root, #aiw-root * {
@@ -47,7 +58,7 @@
     color: var(--aiw-accentText);
     display:flex; align-items:center; justify-content:space-between;
   }
-  #aiw-title{font-weight:700; font-size:14px; letter-spacing:.2px;}
+  #aiw-title{font-weight:700; font-size:14px;}
   #aiw-sub{font-size:12px; opacity:.85; margin-top:2px;}
   #aiw-head-left{display:flex; flex-direction:column;}
   #aiw-close{
@@ -92,66 +103,41 @@
     cursor:pointer; font-weight:700;
     background: var(--aiw-accent); color: var(--aiw-accentText);
   }
-  #aiw-send:active{transform:translateY(1px);}
-`;
+  `;
   document.head.appendChild(style);
 
-  // --- UI ---
   const btn = document.createElement("button");
   btn.type = "button";
   btn.id = "aiw-btn";
   btn.textContent = "💬";
-  // Create small dismiss X for bubble
-const bubbleClose = document.createElement("button");
-bubbleClose.textContent = "×";
-bubbleClose.style.position = "fixed";
-bubbleClose.style.right = "14px";
-bubbleClose.style.bottom = "74px";
-bubbleClose.style.width = "20px";
-bubbleClose.style.height = "20px";
-bubbleClose.style.borderRadius = "50%";
-bubbleClose.style.border = "none";
-bubbleClose.style.cursor = "pointer";
-bubbleClose.style.fontSize = "14px";
-bubbleClose.style.background = "#000";
-bubbleClose.style.color = "#fff";
-bubbleClose.style.zIndex = "999999";
-
-bubbleClose.addEventListener("click", () => {
-  btn.style.display = "none";
-  panel.style.display = "none";
-  bubbleClose.style.display = "none";
-});
 
   const panel = document.createElement("div");
   panel.id = "aiw-panel";
   panel.innerHTML = `
-  <div id="aiw-wrap">
-    <div id="aiw-head">
-      <div id="aiw-head-left">
-        <div id="aiw-title">Chat</div>
-        <div id="aiw-sub">Automated assistant</div>
+    <div id="aiw-wrap">
+      <div id="aiw-head">
+        <div id="aiw-head-left">
+          <div id="aiw-title">Chat</div>
+          <div id="aiw-sub">Automated assistant</div>
+        </div>
+        <button id="aiw-close" type="button">×</button>
       </div>
-      <button id="aiw-close" type="button">×</button>
+      <div id="aiw-body"></div>
+      <div id="aiw-note">Ask about services, pricing, appointments, or contact.</div>
+      <form id="aiw-form">
+        <input id="aiw-input" placeholder="Type a message..." autocomplete="off" />
+        <button id="aiw-send" type="submit">Send</button>
+      </form>
     </div>
-    <div id="aiw-body"></div>
-    <div id="aiw-note">Don’t share sensitive information.</div>
-    <form id="aiw-form">
-      <input id="aiw-input" placeholder="Type a message..." autocomplete="off" />
-      <button id="aiw-send" type="submit">Send</button>
-    </form>
-  </div>
   `;
 
   const root = document.createElement("div");
   root.id = "aiw-root";
-  // Theme vars live on root
   root.style.setProperty("--aiw-accent", ui.accent);
   root.style.setProperty("--aiw-accentText", ui.accentText);
 
   root.appendChild(btn);
   root.appendChild(panel);
-  root.appendChild(bubbleClose);
   document.body.appendChild(root);
 
   const body = panel.querySelector("#aiw-body");
@@ -186,6 +172,7 @@ bubbleClose.addEventListener("click", () => {
       root.style.setProperty("--aiw-accentText", ui.accentText || "#ffffff");
     } catch {}
   }
+
   loadConfig();
 
   btn.addEventListener("click", () => {
@@ -195,17 +182,17 @@ bubbleClose.addEventListener("click", () => {
     if (panel.style.display === "block" && body.childElementCount === 0) {
       addMsg("bot", ui.greeting || "Hi! How can I help?");
     }
+
     input.focus();
   });
 
   panel.querySelector("#aiw-close").addEventListener("click", () => {
     panel.style.display = "none";
   });
-  
-
 
   panel.querySelector("#aiw-form").addEventListener("submit", async (e) => {
     e.preventDefault();
+
     const msg = input.value.trim();
     if (!msg) return;
 
@@ -218,7 +205,12 @@ bubbleClose.addEventListener("click", () => {
       const res = await fetch(CHAT_URL, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ clientId, message: msg, pageUrl: location.href }),
+        body: JSON.stringify({
+          clientId,
+          sessionId,
+          message: msg,
+          pageUrl: location.href
+        })
       });
 
       const data = await res.json();
