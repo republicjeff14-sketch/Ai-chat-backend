@@ -58,7 +58,7 @@ function safeJsonParse(text) {
     return null;
   }
 }
-async function classifyLead(openai, client, message) {
+async function classifyLead(openai, message)  {
   const classifierPrompt = `
 You are a lead-capture classifier for a business website chat widget.
 
