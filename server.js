@@ -451,11 +451,17 @@ app.post("/chat", async (req, res) => {
       conversation.service_interest ||
       null;
 
-    const leadIntent = Boolean(
-      conversation.lead_intent ||
-      detectLeadIntent(cleanMessage) ||
-      classifierData?.isLead
-    );
+    const currentMessageLeadIntent =
+  detectLeadIntent(cleanMessage) || Boolean(classifierData?.isLead);
+
+const alreadyCompletedLead = conversation.status === "lead_complete";
+
+const conversationStillCollecting =
+  !alreadyCompletedLead &&
+  conversation.lead_intent &&
+  !(conversation.visitor_email || conversation.visitor_phone);
+
+const leadIntent = Boolean(currentMessageLeadIntent || conversationStillCollecting);
 
     const updatedConversation = await updateConversation(conversation.id, {
       lead_intent: leadIntent,
@@ -467,55 +473,74 @@ app.post("/chat", async (req, res) => {
       last_user_message: cleanMessage
     });
 
-    if (leadIntent) {
-      const hasContact = Boolean(mergedEmail || mergedPhone);
+if (leadIntent) {
+  const hasContact = Boolean(mergedEmail || mergedPhone);
 
-      if (!hasContact) {
-        return res.json({
-          reply: classifierData?.followupQuestion || "Sure — what’s the best phone number or email for follow-up?",
-          state: {
-            mode: "collecting_lead",
-            missingFields: ["contact"]
-          }
-        });
+  if (!hasContact) {
+    return res.json({
+      reply:
+        classifierData?.followupQuestion ||
+        "Sure — what’s the best phone number or email for follow-up?",
+      state: {
+        mode: "collecting_lead",
+        missingFields: ["contact"]
       }
+    });
+  }
 
-      const lead = await insertOrUpdateLead({
-        clientId,
-        conversationId: updatedConversation.id,
-        name: mergedName,
-        email: mergedEmail,
-        phone: mergedPhone,
-        serviceInterest: mergedService,
-        message: mergedService || cleanMessage,
-        pageUrl
-      });
+  const isFreshLeadRequest =
+  currentMessageLeadIntent || conversationStillCollecting;
 
-      await updateConversation(updatedConversation.id, {
-        status: "lead_complete"
-      });
+  if (isFreshLeadRequest) {
+    const lead = await insertOrUpdateLead({
+      clientId,
+      conversationId: updatedConversation.id,
+      name: mergedName,
+      email: mergedEmail,
+      phone: mergedPhone,
+      serviceInterest: mergedService,
+      message: mergedService || cleanMessage,
+      pageUrl
+    });
 
-      return res.json({
-        reply: mergedName
-          ? `Thanks ${mergedName} — someone from our team will contact you shortly.`
-          : "Thanks — someone from our team will contact you shortly.",
-        state: {
-          mode: "lead_complete",
-          leadId: lead.id
-        }
-      });
-    }
+    await updateConversation(updatedConversation.id, {
+  status: "lead_complete",
+  lead_intent: false
+});
+
+    return res.json({
+      reply: mergedName
+        ? `Thanks ${mergedName} — someone from our team will contact you shortly.`
+        : "Thanks — someone from our team will contact you shortly.",
+      state: {
+        mode: "lead_complete",
+        leadId: lead.id
+      }
+    });
+  }
+}
 
     const topicLooksBusinessRelated = detectBusinessTopic(cleanMessage);
 
-    if (!topicLooksBusinessRelated) {
-      return res.json({
-        reply: buildOffTopicReply(),
-        state: {
-          mode: "off_topic"
-        }
-      });
+if (
+  updatedConversation.status === "lead_complete" &&
+  !currentMessageLeadIntent &&
+  topicLooksBusinessRelated
+) {
+  await updateConversation(updatedConversation.id, {
+    lead_intent: false,
+    status: "open"
+  });
+}
+
+if (!topicLooksBusinessRelated) {
+  return res.json({
+    reply: buildOffTopicReply(),
+    state: {
+      mode: "off_topic"
     }
+  });
+}
 
     const systemPrompt = buildSystemPrompt(client, updatedConversation);
 
