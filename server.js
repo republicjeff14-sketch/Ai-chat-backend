@@ -597,7 +597,7 @@ if (!topicLooksBusinessRelated) {
   });
 }
 
-    const systemPrompt = buildSystemPrompt(client, updatedConversation);
+    const systemPrompt = buildSystemPrompt(client, activeConversation);
 
     const response = await openai.responses.create({
       model: client.model || "gpt-4.1-mini",
