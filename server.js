@@ -522,12 +522,14 @@ if (leadIntent) {
 
     const topicLooksBusinessRelated = detectBusinessTopic(cleanMessage);
 
+let activeConversation = updatedConversation;
+
 if (
-  updatedConversation.status === "lead_complete" &&
+  activeConversation.status === "lead_complete" &&
   !currentMessageLeadIntent &&
   topicLooksBusinessRelated
 ) {
-  await updateConversation(updatedConversation.id, {
+  activeConversation = await updateConversation(activeConversation.id, {
     lead_intent: false,
     status: "open"
   });
