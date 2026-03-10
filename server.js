@@ -185,7 +185,41 @@ Rules:
 
   return safeJsonParse(result.output_text);
 }
+async function classifyMessage(openaiClient, client, message) {
+  const prompt = `
+You are a classifier for a business website assistant.
 
+Business context:
+${client.promptClient || ""}
+
+Return ONLY valid JSON in this exact shape:
+{
+  "isBusinessRelevant": boolean,
+  "isLead": boolean,
+  "intent": "quote" | "booking" | "pricing" | "service_question" | "contact" | "off_topic" | "other",
+  "confidence": number,
+  "suggestedFollowup": string | null
+}
+
+Rules:
+- isBusinessRelevant should be true if the message is about the business, its services, pricing, quotes, scheduling, hours, location, contact, or service availability.
+- Treat typos, slang, and casual wording as valid if the likely meaning is about the business.
+- isLead should be true if the visitor appears to want a quote, estimate, booking, pricing, service, or follow-up.
+- If the message is unrelated to the business, mark isBusinessRelevant false and intent off_topic.
+- confidence should be a number from 0 to 1.
+- Return JSON only.
+`;
+
+  const result = await openaiClient.responses.create({
+    model: "gpt-4.1-mini",
+    input: [
+      { role: "system", content: prompt },
+      { role: "user", content: message }
+    ]
+  });
+
+  return safeJsonParse(result.output_text);
+}
 function buildSystemPrompt(client, conversation) {
   return `
 You are a website lead capture assistant for a business.
@@ -441,7 +475,19 @@ app.post("/chat", async (req, res) => {
         console.error("Lead classifier failed:", err.message);
       }
     }
+let messageClass = null;
 
+const keywordBusinessMatch = detectBusinessTopic(cleanMessage);
+const obviousLeadIntent = detectLeadIntent(cleanMessage);
+const obviousContactInfo = Boolean(ruleEmail || rulePhone);
+
+if (!keywordBusinessMatch && !obviousLeadIntent && !obviousContactInfo) {
+  try {
+    messageClass = await classifyMessage(openai, client, cleanMessage);
+  } catch (err) {
+    console.error("Message classifier failed:", err.message);
+  }
+}
     const mergedName = ruleName || classifierData?.name || conversation.visitor_name || null;
     const mergedEmail = ruleEmail || classifierData?.email || conversation.visitor_email || null;
     const mergedPhone = rulePhone || classifierData?.phone || conversation.visitor_phone || null;
@@ -451,8 +497,10 @@ app.post("/chat", async (req, res) => {
       conversation.service_interest ||
       null;
 
-    const currentMessageLeadIntent =
-  detectLeadIntent(cleanMessage) || Boolean(classifierData?.isLead);
+const currentMessageLeadIntent =
+  obviousLeadIntent ||
+  Boolean(classifierData?.isLead) ||
+  Boolean(messageClass?.isLead);
 
 const alreadyCompletedLead = conversation.status === "lead_complete";
 
@@ -477,15 +525,16 @@ if (leadIntent) {
   const hasContact = Boolean(mergedEmail || mergedPhone);
 
   if (!hasContact) {
-    return res.json({
-      reply:
-        classifierData?.followupQuestion ||
-        "Sure — what’s the best phone number or email for follow-up?",
-      state: {
-        mode: "collecting_lead",
-        missingFields: ["contact"]
-      }
-    });
+return res.json({
+  reply:
+    classifierData?.followupQuestion ||
+    messageClass?.suggestedFollowup ||
+    "Sure — what’s the best phone number or email for follow-up?",
+  state: {
+    mode: "collecting_lead",
+    missingFields: ["contact"]
+  }
+});
   }
 
   const isFreshLeadRequest =
@@ -520,7 +569,11 @@ if (leadIntent) {
   }
 }
 
-    const topicLooksBusinessRelated = detectBusinessTopic(cleanMessage);
+   const topicLooksBusinessRelated =
+  keywordBusinessMatch ||
+  obviousLeadIntent ||
+  obviousContactInfo ||
+  Boolean(messageClass?.isBusinessRelevant);
 
 let activeConversation = updatedConversation;
 
