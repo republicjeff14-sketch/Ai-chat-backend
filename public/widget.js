@@ -10,13 +10,30 @@
   const STORAGE_KEY = `aiw_session_${clientId}`;
 
   function getSessionId() {
-    let id = localStorage.getItem(STORAGE_KEY);
-    if (!id) {
-      id = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-      localStorage.setItem(STORAGE_KEY, id);
-    }
-    return id;
+  const raw = localStorage.getItem(STORAGE_KEY);
+
+  if (raw) {
+    try {
+      const parsed = JSON.parse(raw);
+      const maxAgeMs = 1000 * 60 * 60 * 12; // 12 hours
+      const isFresh = parsed?.id && parsed?.createdAt && (Date.now() - parsed.createdAt < maxAgeMs);
+
+      if (isFresh) {
+        return parsed.id;
+      }
+    } catch {}
   }
+
+  const id = `sess_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+  localStorage.setItem(
+    STORAGE_KEY,
+    JSON.stringify({
+      id,
+      createdAt: Date.now()
+    })
+  );
+  return id;
+}
 
   const sessionId = getSessionId();
 

@@ -458,10 +458,28 @@ app.post("/chat", async (req, res) => {
     const cleanMessage = normalizeText(message);
     const conversation = await getOrCreateConversation(clientId, sessionId, pageUrl);
 
+    let activeBaseConversation = conversation;
+
+const completedLeadIsStale =
+  conversation.status === "lead_complete" &&
+  conversation.updated_at &&
+  (Date.now() - new Date(conversation.updated_at).getTime() > 1000 * 60 * 60 * 12);
+
+if (completedLeadIsStale) {
+  activeBaseConversation = await updateConversation(conversation.id, {
+    status: "open",
+    lead_intent: false,
+    visitor_name: null,
+    visitor_email: null,
+    visitor_phone: null,
+    service_interest: null
+  });
+}
+
     const ruleName = extractName(cleanMessage);
     const ruleEmail = extractEmail(cleanMessage);
     const rulePhone = extractPhone(cleanMessage);
-    const ruleService = detectLeadIntent(cleanMessage) || conversation.lead_intent
+const ruleService = detectLeadIntent(cleanMessage) || activeBaseConversation.lead_intent
       ? extractServiceInterest(cleanMessage)
       : null;
 
@@ -500,7 +518,10 @@ if (!keywordBusinessMatch && !obviousLeadIntent && !obviousContactInfo) {
 const currentMessageLeadIntent =
   obviousLeadIntent ||
   Boolean(classifierData?.isLead) ||
-  Boolean(messageClass?.isLead);
+  (
+    Boolean(messageClass?.isLead) &&
+    ["quote", "booking", "pricing", "contact"].includes(messageClass?.intent)
+  );
 
 const alreadyCompletedLead = conversation.status === "lead_complete";
 
