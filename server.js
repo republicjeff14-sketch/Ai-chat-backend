@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import OpenAI from "openai";
+import { Resend } from "resend";
 import path from "path";
 import { fileURLToPath } from "url";
 import fs from "fs";
@@ -23,6 +24,7 @@ const __dirname = path.dirname(__filename);
 app.use(express.static(path.join(__dirname, "public")));
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 // -------------------- client config --------------------
 const CLIENTS_PATH = path.join(__dirname, "clients.json");
@@ -106,9 +108,66 @@ function detectLeadIntent(text) {
 }
 
 function detectBusinessTopic(text) {
-  return /\b(service|services|pricing|price|quote|estimate|book|booking|appointment|schedule|hours|location|contact|phone|email|availability|repair|replacement|wash|detail|roof|cleaning)\b/i.test(
-    text
-  );
+  const t = normalizeText(text).toLowerCase();
+
+  const businessPatterns = [
+    /\bservice\b/,
+    /\bservices\b/,
+    /\bquote\b/,
+    /\bestimate\b/,
+    /\bpricing\b/,
+    /\bprice\b/,
+    /\bcost\b/,
+    /\bhow much\b/,
+    /\bbook\b/,
+    /\bbooking\b/,
+    /\bappointment\b/,
+    /\bschedule\b/,
+    /\bavailability\b/,
+    /\bavailable\b/,
+    /\bhours\b/,
+    /\bopen\b/,
+    /\bclosed\b/,
+    /\blocation\b/,
+    /\baddress\b/,
+    /\bwhere are you\b/,
+    /\bwhere.*located\b/,
+    /\bcontact\b/,
+    /\bphone\b/,
+    /\bemail\b/,
+    /\bcall\b/,
+    /\breach\b/,
+    /\bcome by\b/,
+    /\bvisit\b/,
+    /\btomorrow\b/,
+    /\btoday\b/,
+    /\bthis week\b/,
+    /\bserve\b/,
+    /\bservice area\b/,
+    /\barea\b/,
+    /\bareas\b/,
+    /\bnear me\b/,
+    /\binterior\b/,
+    /\bexterior\b/,
+    /\bcleaning\b/,
+    /\bdetail\b/,
+    /\bdetailing\b/,
+    /\bwash\b/,
+    /\brepair\b/,
+    /\breplacement\b/,
+    /\binstall\b/,
+    /\binstallation\b/,
+    /\bleak\b/,
+    /\broof\b/,
+    /\bconsultation\b/,
+    /\bcan you do\b/,
+    /\bdo you do\b/,
+    /\bdo you guys do\b/,
+    /\byall do\b/,
+    /\by'all do\b/
+  ];
+
+  return businessPatterns.some((pattern) => pattern.test(t));
 }
 
 function extractEmail(text) {
@@ -124,7 +183,7 @@ function extractPhone(text) {
 
 function extractName(text) {
   const patterns = [
-    /(?:my name is|i am|i'm|im|this is|name[:\s]+)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)/i
+    /(?:my name is|i am|i'm|im|this is|name[:\s]+)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)(?=\s+(?:and|my|email|phone|at)\b|$)/i
   ];
 
   for (const pattern of patterns) {
@@ -138,9 +197,7 @@ function extractName(text) {
 function extractServiceInterest(text) {
   const cleaned = normalizeText(text);
   if (!cleaned) return null;
-
   if (cleaned.length <= 120) return cleaned;
-
   return cleaned.slice(0, 120);
 }
 
@@ -185,6 +242,7 @@ Rules:
 
   return safeJsonParse(result.output_text);
 }
+
 async function classifyMessage(openaiClient, client, message) {
   const prompt = `
 You are a classifier for a business website assistant.
@@ -202,10 +260,20 @@ Return ONLY valid JSON in this exact shape:
 }
 
 Rules:
-- isBusinessRelevant should be true if the message is about the business, its services, pricing, quotes, scheduling, hours, location, contact, or service availability.
+- isBusinessRelevant should be true if the message is about the business, its services, pricing, quotes, scheduling, hours, location, contact, or availability.
 - Treat typos, slang, and casual wording as valid if the likely meaning is about the business.
-- isLead should be true if the visitor appears to want a quote, estimate, booking, pricing, service, or follow-up.
-- If the message is unrelated to the business, mark isBusinessRelevant false and intent off_topic.
+- isLead should ONLY be true if the visitor is asking for a quote, estimate, pricing, booking, scheduling, contact, callback, or direct follow-up.
+- Questions asking whether the business offers a service should usually be "service_question", not a lead.
+- Examples of service_question and NOT a lead:
+  - "do yall do detailing"
+  - "do you clean interiors"
+  - "yall fix roof leaks"
+- Examples of lead:
+  - "i want a quote"
+  - "how much does detailing cost"
+  - "can someone call me"
+  - "i want to book"
+- If unrelated to the business, mark isBusinessRelevant false and intent off_topic.
 - confidence should be a number from 0 to 1.
 - Return JSON only.
 `;
@@ -220,6 +288,7 @@ Rules:
 
   return safeJsonParse(result.output_text);
 }
+
 function buildSystemPrompt(client, conversation) {
   return `
 You are a website lead capture assistant for a business.
@@ -301,7 +370,6 @@ async function updateConversation(conversationId, patch) {
   }
 
   fields.push(`updated_at = now()`);
-
   values.push(conversationId);
 
   const result = await pool.query(
@@ -413,6 +481,59 @@ async function insertOrUpdateLead({
   return inserted.rows[0];
 }
 
+async function logMessage(conversationId, role, content) {
+  if (!conversationId || !role || !content) return;
+
+  try {
+    await pool.query(
+      `
+        insert into messages (conversation_id, role, content)
+        values ($1, $2, $3)
+      `,
+      [conversationId, role, content]
+    );
+  } catch (err) {
+    console.error("Failed to log message:", err.message);
+  }
+}
+
+async function sendLeadNotification(client, lead) {
+  if (!client.notificationEmail) return;
+  if (!process.env.RESEND_API_KEY) return;
+
+  const fromEmail = process.env.NOTIFY_FROM_EMAIL;
+  if (!fromEmail) {
+    console.error("Missing NOTIFY_FROM_EMAIL");
+    return;
+  }
+
+  const subject = `New website lead for ${client.clientId}`;
+
+  const body = `
+New website lead
+
+Client: ${client.clientId}
+Name: ${lead.name || "N/A"}
+Email: ${lead.email || "N/A"}
+Phone: ${lead.phone || "N/A"}
+Service: ${lead.service_interest || lead.message || "N/A"}
+Page URL: ${lead.page_url || "N/A"}
+Status: ${lead.status || "new"}
+Created At: ${lead.created_at || new Date().toISOString()}
+`;
+
+  try {
+    await resend.emails.send({
+      from: fromEmail,
+      to: client.notificationEmail,
+      subject,
+      text: body
+    });
+  } catch (err) {
+    console.error("Failed to send lead notification:", err.message);
+  }
+}
+
 // -------------------- routes --------------------
 app.get("/health", (req, res) => {
   res.json({ status: "ok" });
@@ -460,31 +581,35 @@ app.post("/chat", async (req, res) => {
 
     let activeBaseConversation = conversation;
 
-const completedLeadIsStale =
-  conversation.status === "lead_complete" &&
-  conversation.updated_at &&
-  (Date.now() - new Date(conversation.updated_at).getTime() > 1000 * 60 * 60 * 12);
+    const completedLeadIsStale =
+      conversation.status === "lead_complete" &&
+      conversation.updated_at &&
+      Date.now() - new Date(conversation.updated_at).getTime() > 1000 * 60 * 60 * 12;
 
-if (completedLeadIsStale) {
-  activeBaseConversation = await updateConversation(conversation.id, {
-    status: "open",
-    lead_intent: false,
-    visitor_name: null,
-    visitor_email: null,
-    visitor_phone: null,
-    service_interest: null
-  });
-}
+    if (completedLeadIsStale) {
+      activeBaseConversation = await updateConversation(conversation.id, {
+        status: "open",
+        lead_intent: false,
+        visitor_name: null,
+        visitor_email: null,
+        visitor_phone: null,
+        service_interest: null
+      });
+    }
+
+    await logMessage(activeBaseConversation.id, "user", cleanMessage);
 
     const ruleName = extractName(cleanMessage);
     const ruleEmail = extractEmail(cleanMessage);
     const rulePhone = extractPhone(cleanMessage);
-const ruleService = detectLeadIntent(cleanMessage) || activeBaseConversation.lead_intent
-      ? extractServiceInterest(cleanMessage)
-      : null;
+    const obviousLeadIntent = detectLeadIntent(cleanMessage);
+    const ruleService =
+      obviousLeadIntent || activeBaseConversation.lead_intent
+        ? extractServiceInterest(cleanMessage)
+        : null;
 
     let classifierData = null;
-    const shouldClassify = detectLeadIntent(cleanMessage) || conversation.lead_intent;
+    const shouldClassify = obviousLeadIntent || activeBaseConversation.lead_intent;
 
     if (shouldClassify) {
       try {
@@ -493,130 +618,147 @@ const ruleService = detectLeadIntent(cleanMessage) || activeBaseConversation.lea
         console.error("Lead classifier failed:", err.message);
       }
     }
-let messageClass = null;
 
-const keywordBusinessMatch = detectBusinessTopic(cleanMessage);
-const obviousLeadIntent = detectLeadIntent(cleanMessage);
-const obviousContactInfo = Boolean(ruleEmail || rulePhone);
+    let messageClass = null;
 
-if (!keywordBusinessMatch && !obviousLeadIntent && !obviousContactInfo) {
-  try {
-    messageClass = await classifyMessage(openai, client, cleanMessage);
-  } catch (err) {
-    console.error("Message classifier failed:", err.message);
-  }
-}
-    const mergedName = ruleName || classifierData?.name || conversation.visitor_name || null;
-    const mergedEmail = ruleEmail || classifierData?.email || conversation.visitor_email || null;
-    const mergedPhone = rulePhone || classifierData?.phone || conversation.visitor_phone || null;
+    const keywordBusinessMatch = detectBusinessTopic(cleanMessage);
+    const obviousContactInfo = Boolean(ruleEmail || rulePhone);
+
+    if (!keywordBusinessMatch && !obviousLeadIntent && !obviousContactInfo) {
+      try {
+        messageClass = await classifyMessage(openai, client, cleanMessage);
+      } catch (err) {
+        console.error("Message classifier failed:", err.message);
+      }
+    }
+
+    const mergedName =
+      ruleName || classifierData?.name || activeBaseConversation.visitor_name || null;
+    const mergedEmail =
+      ruleEmail || classifierData?.email || activeBaseConversation.visitor_email || null;
+    const mergedPhone =
+      rulePhone || classifierData?.phone || activeBaseConversation.visitor_phone || null;
     const mergedService =
       (ruleService && ruleService.length > 2 ? ruleService : null) ||
       classifierData?.notes ||
-      conversation.service_interest ||
+      activeBaseConversation.service_interest ||
       null;
 
-const currentMessageLeadIntent =
-  obviousLeadIntent ||
-  Boolean(classifierData?.isLead) ||
-  (
-    Boolean(messageClass?.isLead) &&
-    ["quote", "booking", "pricing", "contact"].includes(messageClass?.intent)
-  );
+    const currentMessageLeadIntent =
+      obviousLeadIntent ||
+      Boolean(classifierData?.isLead) ||
+      (
+        Boolean(messageClass?.isLead) &&
+        ["quote", "booking", "pricing", "contact"].includes(messageClass?.intent)
+      );
 
-const alreadyCompletedLead = conversation.status === "lead_complete";
+    const alreadyCompletedLead = activeBaseConversation.status === "lead_complete";
 
-const conversationStillCollecting =
-  !alreadyCompletedLead &&
-  conversation.lead_intent &&
-  !(conversation.visitor_email || conversation.visitor_phone);
+    const conversationStillCollecting =
+      !alreadyCompletedLead &&
+      activeBaseConversation.lead_intent &&
+      !(activeBaseConversation.visitor_email || activeBaseConversation.visitor_phone);
 
-const leadIntent = Boolean(currentMessageLeadIntent || conversationStillCollecting);
+    const leadIntent = Boolean(currentMessageLeadIntent || conversationStillCollecting);
 
-    const updatedConversation = await updateConversation(conversation.id, {
+    const updatedConversation = await updateConversation(activeBaseConversation.id, {
       lead_intent: leadIntent,
       visitor_name: mergedName,
       visitor_email: mergedEmail,
       visitor_phone: mergedPhone,
       service_interest: mergedService,
-      last_page_url: pageUrl || conversation.last_page_url,
+      last_page_url: pageUrl || activeBaseConversation.last_page_url,
       last_user_message: cleanMessage
     });
 
-if (leadIntent) {
-  const hasContact = Boolean(mergedEmail || mergedPhone);
+    if (leadIntent) {
+      const hasContact = Boolean(mergedEmail || mergedPhone);
 
-  if (!hasContact) {
-return res.json({
-  reply:
-    classifierData?.followupQuestion ||
-    messageClass?.suggestedFollowup ||
-    "Sure — what’s the best phone number or email for follow-up?",
-  state: {
-    mode: "collecting_lead",
-    missingFields: ["contact"]
-  }
-});
-  }
+      if (!hasContact) {
+        const reply =
+          classifierData?.followupQuestion ||
+          messageClass?.suggestedFollowup ||
+          "Sure — what’s the best phone number or email for follow-up?";
 
-  const isFreshLeadRequest =
-  currentMessageLeadIntent || conversationStillCollecting;
+        await logMessage(updatedConversation.id, "assistant", reply);
 
-  if (isFreshLeadRequest) {
-    const lead = await insertOrUpdateLead({
-      clientId,
-      conversationId: updatedConversation.id,
-      name: mergedName,
-      email: mergedEmail,
-      phone: mergedPhone,
-      serviceInterest: mergedService,
-      message: mergedService || cleanMessage,
-      pageUrl
-    });
-
-    await updateConversation(updatedConversation.id, {
-  status: "lead_complete",
-  lead_intent: false
-});
-
-    return res.json({
-      reply: mergedName
-        ? `Thanks ${mergedName} — someone from our team will contact you shortly.`
-        : "Thanks — someone from our team will contact you shortly.",
-      state: {
-        mode: "lead_complete",
-        leadId: lead.id
+        return res.json({
+          reply,
+          state: {
+            mode: "collecting_lead",
+            missingFields: ["contact"]
+          }
+        });
       }
-    });
-  }
-}
 
-   const topicLooksBusinessRelated =
-  keywordBusinessMatch ||
-  obviousLeadIntent ||
-  obviousContactInfo ||
-  Boolean(messageClass?.isBusinessRelevant);
+      const isFreshLeadRequest =
+        currentMessageLeadIntent || conversationStillCollecting;
 
-let activeConversation = updatedConversation;
+      if (isFreshLeadRequest) {
+        const lead = await insertOrUpdateLead({
+          clientId,
+          conversationId: updatedConversation.id,
+          name: mergedName,
+          email: mergedEmail,
+          phone: mergedPhone,
+          serviceInterest: mergedService,
+          message: mergedService || cleanMessage,
+          pageUrl
+        });
 
-if (
-  activeConversation.status === "lead_complete" &&
-  !currentMessageLeadIntent &&
-  topicLooksBusinessRelated
-) {
-  activeConversation = await updateConversation(activeConversation.id, {
-    lead_intent: false,
-    status: "open"
-  });
-}
+        await sendLeadNotification(client, lead);
 
-if (!topicLooksBusinessRelated) {
-  return res.json({
-    reply: buildOffTopicReply(),
-    state: {
-      mode: "off_topic"
+        await updateConversation(updatedConversation.id, {
+          status: "lead_complete",
+          lead_intent: false
+        });
+
+        const reply = mergedName
+          ? `Thanks ${mergedName} — someone from our team will contact you shortly.`
+          : "Thanks — someone from our team will contact you shortly.";
+
+        await logMessage(updatedConversation.id, "assistant", reply);
+
+        return res.json({
+          reply,
+          state: {
+            mode: "lead_complete",
+            leadId: lead.id
+          }
+        });
+      }
     }
-  });
-}
+
+    const topicLooksBusinessRelated =
+      keywordBusinessMatch ||
+      obviousLeadIntent ||
+      obviousContactInfo ||
+      Boolean(messageClass?.isBusinessRelevant);
+
+    let activeConversation = updatedConversation;
+
+    if (
+      activeConversation.status === "lead_complete" &&
+      !currentMessageLeadIntent &&
+      topicLooksBusinessRelated
+    ) {
+      activeConversation = await updateConversation(activeConversation.id, {
+        lead_intent: false,
+        status: "open"
+      });
+    }
+
+    if (!topicLooksBusinessRelated) {
+      const reply = buildOffTopicReply();
+      await logMessage(activeConversation.id, "assistant", reply);
+
+      return res.json({
+        reply,
+        state: {
+          mode: "off_topic"
+        }
+      });
+    }
 
     const systemPrompt = buildSystemPrompt(client, activeConversation);
 
@@ -628,8 +770,11 @@ if (!topicLooksBusinessRelated) {
       ]
     });
 
+    const reply = response.output_text || "Sorry — I couldn’t generate a response.";
+    await logMessage(activeConversation.id, "assistant", reply);
+
     return res.json({
-      reply: response.output_text || "Sorry — I couldn’t generate a response.",
+      reply,
       state: {
         mode: "business_info"
       }
