@@ -24,7 +24,9 @@ const __dirname = path.dirname(__filename);
 app.use(express.static(path.join(__dirname, "public")));
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const resend = new Resend(process.env.RESEND_API_KEY);
+const resend = process.env.RESEND_API_KEY
+  ? new Resend(process.env.RESEND_API_KEY)
+  : null;
 
 // -------------------- client config --------------------
 const CLIENTS_PATH = path.join(__dirname, "clients.json");
@@ -183,7 +185,7 @@ function extractPhone(text) {
 
 function extractName(text) {
   const patterns = [
-    /(?:my name is|i am|i'm|im|this is|name[:\s]+)\s+([A-Za-z]+(?:\s+[A-Za-z]+)?)(?=\s+(?:and|my|email|phone|at)\b|$)/i
+    /(?:my name is|i am|i'm|im|this is|name[:\s]+)\s+([A-Za-z]+)/i
   ];
 
   for (const pattern of patterns) {
@@ -499,7 +501,7 @@ async function logMessage(conversationId, role, content) {
 
 async function sendLeadNotification(client, lead) {
   if (!client.notificationEmail) return;
-  if (!process.env.RESEND_API_KEY) return;
+  if (!resend) return;
 
   const fromEmail = process.env.NOTIFY_FROM_EMAIL;
   if (!fromEmail) {
@@ -602,7 +604,12 @@ app.post("/chat", async (req, res) => {
     const ruleName = extractName(cleanMessage);
     const ruleEmail = extractEmail(cleanMessage);
     const rulePhone = extractPhone(cleanMessage);
+
+    const currentMessageHasContact = Boolean(ruleEmail || rulePhone);
+    const currentMessageHasName = Boolean(ruleName);
+
     const obviousLeadIntent = detectLeadIntent(cleanMessage);
+
     const ruleService =
       obviousLeadIntent || activeBaseConversation.lead_intent
         ? extractServiceInterest(cleanMessage)
@@ -672,9 +679,12 @@ app.post("/chat", async (req, res) => {
     });
 
     if (leadIntent) {
-      const hasContact = Boolean(mergedEmail || mergedPhone);
+      const hasAnyContact = Boolean(mergedEmail || mergedPhone);
 
-      if (!hasContact) {
+      const isActivelyCollectingLead =
+        conversationStillCollecting || currentMessageLeadIntent;
+
+      if (!hasAnyContact) {
         const reply =
           classifierData?.followupQuestion ||
           messageClass?.suggestedFollowup ||
@@ -691,10 +701,11 @@ app.post("/chat", async (req, res) => {
         });
       }
 
-      const isFreshLeadRequest =
-        currentMessageLeadIntent || conversationStillCollecting;
+      const shouldCompleteLead =
+        isActivelyCollectingLead &&
+        (currentMessageHasContact || conversationStillCollecting);
 
-      if (isFreshLeadRequest) {
+      if (shouldCompleteLead) {
         const lead = await insertOrUpdateLead({
           clientId,
           conversationId: updatedConversation.id,
@@ -727,12 +738,29 @@ app.post("/chat", async (req, res) => {
           }
         });
       }
+
+      if (isActivelyCollectingLead && !currentMessageHasContact) {
+        const reply = currentMessageHasName
+          ? `Thanks ${mergedName} — what’s the best phone number or email for follow-up?`
+          : "Sure — what’s the best phone number or email for follow-up?";
+
+        await logMessage(updatedConversation.id, "assistant", reply);
+
+        return res.json({
+          reply,
+          state: {
+            mode: "collecting_lead",
+            missingFields: ["contact"]
+          }
+        });
+      }
     }
 
     const topicLooksBusinessRelated =
       keywordBusinessMatch ||
       obviousLeadIntent ||
       obviousContactInfo ||
+      currentMessageHasName ||
       Boolean(messageClass?.isBusinessRelevant);
 
     let activeConversation = updatedConversation;
