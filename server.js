@@ -500,8 +500,22 @@ async function logMessage(conversationId, role, content) {
 }
 
 async function sendLeadNotification(client, lead) {
-  if (!client.notificationEmail) return;
-  if (!resend) return;
+  console.log("sendLeadNotification called", {
+    clientId: client?.clientId,
+    notificationEmail: client?.notificationEmail,
+    hasResend: Boolean(resend),
+    fromEmail: process.env.NOTIFY_FROM_EMAIL
+  });
+
+  if (!client.notificationEmail) {
+    console.log("Skipping email: missing client.notificationEmail");
+    return;
+  }
+
+  if (!resend) {
+    console.log("Skipping email: resend not configured");
+    return;
+  }
 
   const fromEmail = process.env.NOTIFY_FROM_EMAIL;
   if (!fromEmail) {
@@ -525,14 +539,16 @@ Created At: ${lead.created_at || new Date().toISOString()}
 `;
 
   try {
-    await resend.emails.send({
+    const result = await resend.emails.send({
       from: fromEmail,
       to: client.notificationEmail,
       subject,
       text: body
     });
+
+    console.log("Lead notification sent", result);
   } catch (err) {
-    console.error("Failed to send lead notification:", err.message);
+    console.error("Failed to send lead notification:", err);
   }
 }
 
