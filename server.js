@@ -183,6 +183,26 @@ function extractPhone(text) {
   return m[0].replace(/\D/g, "");
 }
 
+function extractLocation(text) {
+  const cleaned = normalizeText(text);
+  if (!cleaned) return null;
+
+  const patterns = [
+    /\b(?:i'?m in|located in|in)\s+([A-Za-z\s]+)$/i,
+    /^([A-Za-z\s]+)$/i
+  ];
+
+  for (const pattern of patterns) {
+    const m = cleaned.match(pattern);
+    if (m) {
+      const value = m[1].trim();
+      if (value.length >= 2 && value.length <= 60) return value;
+    }
+  }
+
+  return null;
+}
+
 function extractName(text) {
   const patterns = [
     /(?:my name is|i am|i'm|im|this is|name[:\s]+)\s+([A-Za-z]+)/i
@@ -195,6 +215,22 @@ function extractName(text) {
 
   return null;
 }
+
+function getMissingLeadFields({ name, email, phone, serviceInterest }, client) {
+  const missing = [];
+
+  const requiresLocation = Boolean(client?.leadSettings?.requireLocation);
+  const requiresName = Boolean(client?.leadSettings?.requireName);
+
+  if (!serviceInterest) missing.push("service");
+  if (!email && !phone) missing.push("contact");
+  if (requiresName && !name) missing.push("name");
+  if (requiresLocation) missing.push("location");
+
+  return missing;
+}
+
+
 
 function extractServiceInterest(text) {
   const cleaned = normalizeText(text);
@@ -313,6 +349,10 @@ Rules:
 - If the visitor asks for pricing, a quote, booking, or contact, help collect the missing details needed for follow-up.
 - If the visitor is off-topic, politely redirect them to services, pricing, appointments, or contact help only.
 - Do not invent pricing, policies, or services.
+- Do not ask for location unless the business context explicitly requires location for quotes.
+- For quote requests, prioritize collecting contact information first unless service details are missing.
+- Do not invent pricing logic, service areas, or quote requirements not stated in the business context.
+- Keep follow-up questions minimal and logical.
 
 Business context:
 ${client.promptClient || ""}
@@ -695,82 +735,82 @@ app.post("/chat", async (req, res) => {
     });
 
     if (leadIntent) {
-      const hasAnyContact = Boolean(mergedEmail || mergedPhone);
+  const missingFields = getMissingLeadFields(
+    {
+      name: mergedName,
+      email: mergedEmail,
+      phone: mergedPhone,
+      serviceInterest: mergedService
+    },
+    client
+  );
 
-      const isActivelyCollectingLead =
-        conversationStillCollecting || currentMessageLeadIntent;
+  const isActivelyCollectingLead =
+    conversationStillCollecting || currentMessageLeadIntent;
 
-      if (!hasAnyContact) {
-        const reply =
-          classifierData?.followupQuestion ||
-          messageClass?.suggestedFollowup ||
-          "Sure — what’s the best phone number or email for follow-up?";
+  if (missingFields.includes("contact")) {
+    const reply = currentMessageHasName
+      ? `Thanks ${mergedName} — what’s the best phone number or email for follow-up?`
+      : "Sure — what’s the best phone number or email for follow-up?";
 
-        await logMessage(updatedConversation.id, "assistant", reply);
+    await logMessage(updatedConversation.id, "assistant", reply);
 
-        return res.json({
-          reply,
-          state: {
-            mode: "collecting_lead",
-            missingFields: ["contact"]
-          }
-        });
+    return res.json({
+      reply,
+      state: {
+        mode: "collecting_lead",
+        missingFields
       }
+    });
+  }
 
-      const shouldCompleteLead =
-        isActivelyCollectingLead &&
-        (currentMessageHasContact || conversationStillCollecting);
+  if (missingFields.includes("service")) {
+    const reply = "What service are you interested in?";
+    await logMessage(updatedConversation.id, "assistant", reply);
 
-      if (shouldCompleteLead) {
-        const lead = await insertOrUpdateLead({
-          clientId,
-          conversationId: updatedConversation.id,
-          name: mergedName,
-          email: mergedEmail,
-          phone: mergedPhone,
-          serviceInterest: mergedService,
-          message: mergedService || cleanMessage,
-          pageUrl
-        });
-
-        await sendLeadNotification(client, lead);
-
-        await updateConversation(updatedConversation.id, {
-          status: "lead_complete",
-          lead_intent: false
-        });
-
-        const reply = mergedName
-          ? `Thanks ${mergedName} — someone from our team will contact you shortly.`
-          : "Thanks — someone from our team will contact you shortly.";
-
-        await logMessage(updatedConversation.id, "assistant", reply);
-
-        return res.json({
-          reply,
-          state: {
-            mode: "lead_complete",
-            leadId: lead.id
-          }
-        });
+    return res.json({
+      reply,
+      state: {
+        mode: "collecting_lead",
+        missingFields
       }
+    });
+  }
 
-      if (isActivelyCollectingLead && !currentMessageHasContact) {
-        const reply = currentMessageHasName
-          ? `Thanks ${mergedName} — what’s the best phone number or email for follow-up?`
-          : "Sure — what’s the best phone number or email for follow-up?";
+  if (isActivelyCollectingLead && !missingFields.length) {
+    const lead = await insertOrUpdateLead({
+      clientId,
+      conversationId: updatedConversation.id,
+      name: mergedName,
+      email: mergedEmail,
+      phone: mergedPhone,
+      serviceInterest: mergedService,
+      message: mergedService || cleanMessage,
+      pageUrl
+    });
 
-        await logMessage(updatedConversation.id, "assistant", reply);
+    await sendLeadNotification(client, lead);
 
-        return res.json({
-          reply,
-          state: {
-            mode: "collecting_lead",
-            missingFields: ["contact"]
-          }
-        });
+    await updateConversation(updatedConversation.id, {
+      status: "lead_complete",
+      lead_intent: false
+    });
+
+    const reply = mergedName
+      ? `Thanks ${mergedName} — someone from our team will contact you shortly.`
+      : "Thanks — someone from our team will contact you shortly.";
+
+    await logMessage(updatedConversation.id, "assistant", reply);
+
+    return res.json({
+      reply,
+      state: {
+        mode: "lead_complete",
+        leadId: lead.id
       }
-    }
+    });
+  }
+}
 
     const topicLooksBusinessRelated =
       keywordBusinessMatch ||

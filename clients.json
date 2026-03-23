@@ -20,7 +20,11 @@
       "model": "gpt-4.1-mini",
       "limits": {
         "rpm": 30
-      }
+      },
+        "leadSettings": {
+  "requireName": false,
+  "requireLocation": false
+}
     },
     {
       "clientId": "acme",
