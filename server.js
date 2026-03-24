@@ -111,6 +111,9 @@ function rateLimit(key, rpm) {
 function normalizeText(text) {
   return String(text || "").trim();
 }
+function detectLeadCancellation(text) {
+  return /\b(no|not|don't|dont|just|only|question|ask|asking|curious|not interested|no quote|no thanks)\b/i.test(text);
+}
 
 function detectLeadIntent(text) {
   return /\b(quote|estimate|pricing|price|cost|how much|book|booking|appointment|schedule|contact|call me|reach out|get in touch|consultation|can someone call|can someone contact)\b/i.test(
@@ -646,6 +649,15 @@ app.post("/chat", async (req, res) => {
     const cleanMessage = normalizeText(message);
     const conversation = await getOrCreateConversation(clientId, sessionId, pageUrl);
 
+    const cancellingLead = detectLeadCancellation(cleanMessage);
+
+if (cancellingLead && conversation.lead_intent) {
+  await updateConversation(conversation.id, {
+    lead_intent: false,
+    status: "open"
+  });
+}
+
     let activeBaseConversation = conversation;
 
     const completedLeadIsStale =
@@ -731,8 +743,11 @@ app.post("/chat", async (req, res) => {
       activeBaseConversation.lead_intent &&
       !(activeBaseConversation.visitor_email || activeBaseConversation.visitor_phone);
 
-    const leadIntent = Boolean(currentMessageLeadIntent || conversationStillCollecting);
+    const leadIntent =
+  !alreadyCompletedLead &&
+  (currentMessageLeadIntent || conversationStillCollecting);
 
+  
     const updatedConversation = await updateConversation(activeBaseConversation.id, {
       lead_intent: leadIntent,
       visitor_name: mergedName,
