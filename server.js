@@ -29,30 +29,37 @@ const resend = process.env.RESEND_API_KEY
   : null;
 
 // -------------------- client config --------------------
-const CLIENTS_PATH = path.join(__dirname, "clients.json");
+async function getClientById(clientId) {
+  if (!clientId) return null;
 
-function loadClients() {
-  const raw = fs.readFileSync(CLIENTS_PATH, "utf-8");
-  const parsed = JSON.parse(raw);
-  const map = new Map();
+  const result = await pool.query(
+    `
+      select *
+      from clients
+      where client_id = $1
+      limit 1
+    `,
+    [clientId]
+  );
 
-  for (const client of parsed.clients || []) {
-    map.set(client.clientId, client);
-  }
+  if (!result.rows[0]) return null;
 
-  return map;
+  const row = result.rows[0];
+
+  return {
+    clientId: row.client_id,
+    enabled: row.enabled,
+    allowedOrigins: row.allowed_origins || [],
+    ui: row.ui || {},
+    promptClient: row.prompt_client || "",
+    model: row.model || "gpt-4.1-mini",
+    limits: {
+      rpm: row.rpm_limit ?? 30
+    },
+    notificationEmail: row.notification_email || null,
+    leadSettings: row.lead_settings || {}
+  };
 }
-
-let CLIENTS = loadClients();
-
-fs.watchFile(CLIENTS_PATH, { interval: 500 }, () => {
-  try {
-    CLIENTS = loadClients();
-    console.log("Reloaded clients.json");
-  } catch (err) {
-    console.error("Failed to reload clients.json:", err);
-  }
-});
 
 // -------------------- middleware --------------------
 app.use(
@@ -597,9 +604,9 @@ app.get("/health", (req, res) => {
   res.json({ status: "ok" });
 });
 
-app.get("/client-config", (req, res) => {
+app.get("/client-config", async (req, res) => {
   const clientId = req.query.clientId;
-  const { client, error, status } = getClientOrThrow(clientId);
+  const { client, error, status } = await getClientOrThrow(clientId);
   if (error) return res.status(status).json({ error });
 
   const originCheck = enforceOrigin(req, client);
@@ -614,7 +621,7 @@ app.post("/chat", async (req, res) => {
   try {
     const { clientId, sessionId, message, pageUrl } = req.body;
 
-    const { client, error, status } = getClientOrThrow(clientId);
+    const { client, error, status } = await getClientOrThrow(clientId);
     if (error) return res.status(status).json({ error });
 
     const originCheck = enforceOrigin(req, client);
