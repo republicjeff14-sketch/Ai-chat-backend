@@ -78,15 +78,7 @@ app.use(
   })
 );
 
-function getClientOrThrow(clientId) {
-  if (!clientId) return { error: "clientId required", status: 400 };
 
-  const client = CLIENTS.get(clientId);
-  if (!client) return { error: "Unknown client", status: 404 };
-  if (!client.enabled) return { error: "Client disabled", status: 403 };
-
-  return { client };
-}
 
 function enforceOrigin(req, client) {
   const origin = req.headers.origin;
