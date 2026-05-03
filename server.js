@@ -204,14 +204,19 @@ function extractName(text) {
   return null;
 }
 
-function getMissingLeadFields({ name, email, phone, serviceInterest }, client) {
+function getMissingLeadFields({ name, email, phone, serviceInterest }, client, conversation) {
   const missing = [];
 
-  const requiresLocation = Boolean(client?.leadSettings?.requireLocation);
   const requiresName = Boolean(client?.leadSettings?.requireName);
+  const requiresLocation = Boolean(client?.leadSettings?.requireLocation);
 
-  if (!serviceInterest) missing.push("service");
+  // Contact is always required
   if (!email && !phone) missing.push("contact");
+
+  // Service: only missing if not in current merge AND not already stored in the conversation
+  const hasService = serviceInterest || conversation?.service_interest;
+  if (!hasService) missing.push("service");
+
   if (requiresName && !name) missing.push("name");
   if (requiresLocation) missing.push("location");
 
@@ -601,14 +606,7 @@ app.get("/client-config", async (req, res) => {
 app.post("/chat", async (req, res) => {
   try {
     const { clientId, sessionId, message, pageUrl } = req.body;
-const isBusiness = await detectBusinessTopic(message);
 
-if (!isBusiness) {
-  return res.json({
-    reply: "I can help with services, pricing, or booking — what do you need?",
-    state: { mode: "off_topic" }
-  });
-}
     const { client, error, status } = await getClientOrThrow(clientId);
     if (error) return res.status(status).json({ error });
 
@@ -686,23 +684,13 @@ if (cancellingLead && conversation.lead_intent) {
       }
     }
 
+    const obviousContactInfo = Boolean(ruleEmail || rulePhone || ruleName);
+
+    // Fix #2: await the async function so we get a boolean, not a Promise
+    const keywordBusinessMatch = await detectBusinessTopic(cleanMessage);
+
+    // Fix #3: classify BEFORE computing currentMessageLeadIntent so messageClass is populated
     let messageClass = null;
-
-const keywordBusinessMatch = detectBusinessTopic(cleanMessage);
-   const obviousContactInfo = Boolean(ruleEmail || rulePhone || ruleName);
-
-const currentMessageLeadIntent =
-  obviousLeadIntent ||
-  obviousContactInfo || // 🔥 THIS IS THE FIX
-  (
-    Boolean(classifierData?.isLead) &&
-    detectLeadIntent(cleanMessage)
-  ) ||
-  (
-    Boolean(messageClass?.isLead) &&
-    ["quote", "booking", "pricing", "contact"].includes(messageClass?.intent)
-  );
-
     if (!keywordBusinessMatch && !obviousLeadIntent && !obviousContactInfo) {
       try {
         messageClass = await classifyMessage(openai, client, cleanMessage);
@@ -710,6 +698,18 @@ const currentMessageLeadIntent =
         console.error("Message classifier failed:", err.message);
       }
     }
+
+    const currentMessageLeadIntent =
+      obviousLeadIntent ||
+      obviousContactInfo ||
+      (
+        Boolean(classifierData?.isLead) &&
+        detectLeadIntent(cleanMessage)
+      ) ||
+      (
+        Boolean(messageClass?.isLead) &&
+        ["quote", "booking", "pricing", "contact"].includes(messageClass?.intent)
+      );
 
     const mergedName =
       ruleName || classifierData?.name || activeBaseConversation.visitor_name || null;
@@ -755,7 +755,8 @@ const currentMessageLeadIntent =
       phone: mergedPhone,
       serviceInterest: mergedService
     },
-    client
+    client,
+    activeBaseConversation  // Fix #4: pass conversation so stored service_interest is checked
   );
 
   const isActivelyCollectingLead =
