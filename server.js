@@ -121,67 +121,43 @@ function detectLeadIntent(text) {
   return /\b(quote|estimate|price|cost|how much|book|schedule|appointment|call me|contact me|get a quote)\b/i.test(t);
 }
 
-function detectBusinessTopic(text) {
-  const t = normalizeText(text).toLowerCase();
+async function detectBusinessTopic(message) {
+  const text = message.toLowerCase();
 
-  const businessPatterns = [
-    /\bservice\b/,
-    /\bservices\b/,
-    /\bquote\b/,
-    /\bestimate\b/,
-    /\bpricing\b/,
-    /\bprice\b/,
-    /\bcost\b/,
-    /\bhow much\b/,
-    /\bbook\b/,
-    /\bbooking\b/,
-    /\bappointment\b/,
-    /\bschedule\b/,
-    /\bavailability\b/,
-    /\bavailable\b/,
-    /\bhours\b/,
-    /\bopen\b/,
-    /\bclosed\b/,
-    /\blocation\b/,
-    /\baddress\b/,
-    /\bwhere are you\b/,
-    /\bwhere.*located\b/,
-    /\bcontact\b/,
-    /\bphone\b/,
-    /\bemail\b/,
-    /\bcall\b/,
-    /\breach\b/,
-    /\bcome by\b/,
-    /\bvisit\b/,
-    /\btomorrow\b/,
-    /\btoday\b/,
-    /\bthis week\b/,
-    /\bserve\b/,
-    /\bservice area\b/,
-    /\barea\b/,
-    /\bareas\b/,
-    /\bnear me\b/,
-    /\binterior\b/,
-    /\bexterior\b/,
-    /\bcleaning\b/,
-    /\bdetail\b/,
-    /\bdetailing\b/,
-    /\bwash\b/,
-    /\brepair\b/,
-    /\breplacement\b/,
-    /\binstall\b/,
-    /\binstallation\b/,
-    /\bleak\b/,
-    /\broof\b/,
-    /\bconsultation\b/,
-    /\bcan you do\b/,
-    /\bdo you do\b/,
-    /\bdo you guys do\b/,
-    /\byall do\b/,
-    /\by'all do\b/
+  const keywords = [
+    "service", "repair", "clean", "detail", "install", "fix",
+    "i want", "i need", "looking", "price", "cost", "quote",
+    "how much", "book", "appointment", "schedule"
   ];
 
-  return businessPatterns.some((pattern) => pattern.test(t));
+  // ✅ fast check first
+  if (keywords.some(k => text.includes(k))) {
+    return true;
+  }
+
+  // ✅ fallback to AI (handles typos + slang)
+  try {
+    const response = await openai.chat.completions.create({
+      model: "gpt-4o-mini",
+      messages: [
+        {
+          role: "system",
+          content: "Determine if the user message shows interest in a business service (like cleaning, repair, booking, pricing, etc). Reply ONLY 'yes' or 'no'."
+        },
+        {
+          role: "user",
+          content: message
+        }
+      ],
+      max_tokens: 5
+    });
+
+    const answer = response.choices[0].message.content.toLowerCase();
+    return answer.includes("yes");
+  } catch (err) {
+    console.error("AI intent check failed:", err);
+    return false;
+  }
 }
 
 function extractEmail(text) {
@@ -625,7 +601,7 @@ app.get("/client-config", async (req, res) => {
 app.post("/chat", async (req, res) => {
   try {
     const { clientId, sessionId, message, pageUrl } = req.body;
-if (!detectBusinessTopic(message)) {
+if (!(await detectBusinessTopic(message))) {
   return res.json({
     reply: "I can help with services, pricing, or booking — what do you need?",
   });
@@ -709,7 +685,7 @@ if (cancellingLead && conversation.lead_intent) {
 
     let messageClass = null;
 
-    const keywordBusinessMatch = detectBusinessTopic(cleanMessage);
+const keywordBusinessMatch = await detectBusinessTopic(cleanMessage);
     const obviousContactInfo = Boolean(ruleEmail || rulePhone);
 
     if (!keywordBusinessMatch && !obviousLeadIntent && !obviousContactInfo) {
