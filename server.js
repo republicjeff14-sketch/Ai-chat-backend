@@ -601,9 +601,12 @@ app.get("/client-config", async (req, res) => {
 app.post("/chat", async (req, res) => {
   try {
     const { clientId, sessionId, message, pageUrl } = req.body;
-if (!(await detectBusinessTopic(message))) {
+const isBusiness = await detectBusinessTopic(message);
+
+if (!isBusiness) {
   return res.json({
     reply: "I can help with services, pricing, or booking — what do you need?",
+    state: { mode: "off_topic" }
   });
 }
     const { client, error, status } = await getClientOrThrow(clientId);
@@ -685,8 +688,20 @@ if (cancellingLead && conversation.lead_intent) {
 
     let messageClass = null;
 
-const keywordBusinessMatch = await detectBusinessTopic(cleanMessage);
-    const obviousContactInfo = Boolean(ruleEmail || rulePhone);
+const keywordBusinessMatch = detectBusinessTopic(cleanMessage);
+   const obviousContactInfo = Boolean(ruleEmail || rulePhone || ruleName);
+
+const currentMessageLeadIntent =
+  obviousLeadIntent ||
+  obviousContactInfo || // 🔥 THIS IS THE FIX
+  (
+    Boolean(classifierData?.isLead) &&
+    detectLeadIntent(cleanMessage)
+  ) ||
+  (
+    Boolean(messageClass?.isLead) &&
+    ["quote", "booking", "pricing", "contact"].includes(messageClass?.intent)
+  );
 
     if (!keywordBusinessMatch && !obviousLeadIntent && !obviousContactInfo) {
       try {
@@ -708,13 +723,7 @@ const keywordBusinessMatch = await detectBusinessTopic(cleanMessage);
       activeBaseConversation.service_interest ||
       null;
 
-    const currentMessageLeadIntent =
-      obviousLeadIntent ||
-      Boolean(classifierData?.isLead) ||
-      (
-        Boolean(messageClass?.isLead) &&
-        ["quote", "booking", "pricing", "contact"].includes(messageClass?.intent)
-      );
+    
 
     const alreadyCompletedLead = activeBaseConversation.status === "lead_complete";
 
