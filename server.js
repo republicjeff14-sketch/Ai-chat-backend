@@ -116,9 +116,9 @@ function detectLeadCancellation(text) {
 }
 
 function detectLeadIntent(text) {
-  return /\b(quote|estimate|pricing|price|cost|how much|book|booking|appointment|schedule|contact|call me|reach out|get in touch|consultation|can someone call|can someone contact)\b/i.test(
-    text
-  );
+  const t = normalizeText(text).toLowerCase();
+
+  return /\b(quote|estimate|price|cost|how much|book|schedule|appointment|call me|contact me|get a quote)\b/i.test(t);
 }
 
 function detectBusinessTopic(text) {
@@ -625,7 +625,11 @@ app.get("/client-config", async (req, res) => {
 app.post("/chat", async (req, res) => {
   try {
     const { clientId, sessionId, message, pageUrl } = req.body;
-
+if (!detectBusinessTopic(message)) {
+  return res.json({
+    reply: "I can help with services, pricing, or booking — what do you need?",
+  });
+}
     const { client, error, status } = await getClientOrThrow(clientId);
     if (error) return res.status(status).json({ error });
 
