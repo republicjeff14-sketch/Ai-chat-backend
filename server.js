@@ -555,13 +555,16 @@ app.post("/chat", async (req, res) => {
     const currentMessageHasName = Boolean(ruleName);
 
     // Extract service using AI — skip if message is purely contact info
-    // e.g. "my name is Ben, email is x@x.com" should not overwrite existing service_interest
+    // e.g. "name is ben phone number is 303-444-2232" should not overwrite existing service_interest
     const wordCount = cleanMessage.replace(/[^a-zA-Z ]/g, " ").trim().split(/\s+/).length;
-    const isJustContactInfo = Boolean(ruleEmail || rulePhone) && wordCount < 8 && !obviousLeadIntent;
+    // Message is just contact info if it contains phone/email AND a name pattern but no service keywords
+    const hasServiceKeyword = /\b(detail|wash|clean|repair|fix|install|replace|inspect|mow|paint|roof|gutter|hvac|plumb|electr|landscap|service)\b/i.test(cleanMessage);
+    const isJustContactInfo = Boolean(ruleEmail || rulePhone) && !hasServiceKeyword && !obviousLeadIntent;
 
     const shouldExtractService =
       !isJustContactInfo &&
-      (obviousLeadIntent || activeBaseConversation.lead_intent || Boolean(ruleName));
+      (obviousLeadIntent || activeBaseConversation.lead_intent || Boolean(ruleName)) &&
+      hasServiceKeyword; // Only extract if message actually mentions a service
 
     const ruleService = shouldExtractService
       ? await extractServiceInterest(cleanMessage, client.promptClient)
@@ -686,8 +689,20 @@ app.post("/chat", async (req, res) => {
       activeConversation = await updateConversation(activeConversation.id, { lead_intent: false, status: "open" });
     }
 
-    // Greetings should get a natural AI response, not the off-topic block
-    const isGreeting = /^(hi|hello|hey|howdy|sup|what's up|whats up|yo|good morning|good afternoon|good evening|hiya|helo|helo there)[\s!?.]*$/i.test(cleanMessage.trim());
+    // Greetings should pass through to the AI for a natural response
+    const isGreeting = /^(hi|hello|hey|howdy|sup|what.?s up|yo|good morning|good afternoon|good evening|hiya)[\s!?.]*$/i.test(cleanMessage.trim());
+
+    // Short closing messages should get a polite goodbye, not the off-topic block
+    const isClosing = /^(no|nope|nothing|no thanks|nah|that.?s all|all good|i.?m good|i.?m all set|thanks|thank you|ty|thx|ok|okay|sounds good|great|perfect|got it|bye|goodbye|talk later|ttyl)[\s!?.]*$/i.test(cleanMessage.trim());
+
+    if (isClosing) {
+      const name = activeConversation.visitor_name;
+      const reply = name
+        ? `Sounds good, ${name}! Don't hesitate to reach out if you need anything else.`
+        : "Sounds good! Don't hesitate to reach out if you need anything else.";
+      await logMessage(activeConversation.id, "assistant", reply);
+      return res.json({ reply, state: { mode: "closing" } });
+    }
 
     if (!topicLooksBusinessRelated && !isGreeting) {
       const reply = buildOffTopicReply();
