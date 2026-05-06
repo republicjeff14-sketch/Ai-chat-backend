@@ -567,11 +567,6 @@ app.post("/chat", async (req, res) => {
       ? await extractServiceInterest(cleanMessage, client.promptClient)
       : null;
 
-      (obviousLeadIntent || activeBaseConversation.lead_intent || Boolean(ruleName));
-
-    const ruleService = shouldExtractService
-      ? await extractServiceInterest(cleanMessage, client.promptClient)
-      : null;
 
     // ── AI classification ───────────────────────────────────────
     let classifierData = null;
