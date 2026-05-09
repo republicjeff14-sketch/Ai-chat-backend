@@ -43,7 +43,10 @@ async function getClientById(clientId) {
     model: row.model || "gpt-4.1-mini",
     limits: { rpm: row.rpm_limit ?? 30 },
     notificationEmail: row.notification_email || null,
-    leadSettings: row.lead_settings || {}
+    leadSettings: row.lead_settings || {},
+    plan: row.plan || "starter",
+    leadsThisMonth: row.leads_this_month || 0,
+    leadsResetAt: row.leads_reset_at || null
   };
 }
 
@@ -53,6 +56,43 @@ async function getClientOrThrow(clientId) {
   if (!client) return { error: "Unknown client", status: 404 };
   if (!client.enabled) return { error: "Client disabled", status: 403 };
   return { client };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// PLAN LIMITS
+// ─────────────────────────────────────────────────────────────────────────────
+
+const PLAN_LIMITS = {
+  starter: { leadsPerMonth: 75, name: "Starter" },
+  pro:     { leadsPerMonth: Infinity, name: "Pro" },
+  agency:  { leadsPerMonth: Infinity, name: "Agency" }
+};
+
+async function checkAndIncrementLeads(clientId, plan, leadsThisMonth, leadsResetAt) {
+  const limit = PLAN_LIMITS[plan]?.leadsPerMonth ?? 75;
+
+  // Reset counter if it's been over 30 days
+  const resetDate = leadsResetAt ? new Date(leadsResetAt) : new Date(0);
+  const daysSinceReset = (Date.now() - resetDate.getTime()) / (1000 * 60 * 60 * 24);
+
+  if (daysSinceReset >= 30) {
+    await pool.query(
+      `UPDATE clients SET leads_this_month = 1, leads_reset_at = now() WHERE client_id = $1`,
+      [clientId]
+    );
+    return { allowed: true, leadsThisMonth: 1, limit };
+  }
+
+  if (leadsThisMonth >= limit) {
+    return { allowed: false, leadsThisMonth, limit };
+  }
+
+  await pool.query(
+    `UPDATE clients SET leads_this_month = leads_this_month + 1 WHERE client_id = $1`,
+    [clientId]
+  );
+
+  return { allowed: true, leadsThisMonth: leadsThisMonth + 1, limit };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -377,6 +417,8 @@ app.post("/chat", async (req, res) => {
     // ONE AI CALL — decides everything
     const brain = await callBrain(client, conversation, recentMessages, cleanMessage);
 
+    // Check lead limit BEFORE saving a lead (only counts when lead_complete)
+
     // Merge extracted info with existing conversation state
     const merged = {
       name: brain.extracted?.name || conversation.visitor_name || null,
@@ -398,8 +440,20 @@ app.post("/chat", async (req, res) => {
       lead_intent: brain.intent === "capturing_lead" || brain.intent === "lead_complete"
     });
 
-    // If lead is complete, save it and notify
+    // If lead is complete, check plan limit then save
     if (brain.lead_complete && (merged.email || merged.phone)) {
+      const limitCheck = await checkAndIncrementLeads(
+        clientId, client.plan, client.leadsThisMonth, client.leadsResetAt
+      );
+
+      if (!limitCheck.allowed) {
+        await logMessage(conversation.id, "assistant", brain.reply);
+        return res.json({
+          reply: brain.reply,
+          state: { mode: brain.intent, leadComplete: false, limitReached: true }
+        });
+      }
+
       const lead = await insertOrUpdateLead({
         clientId,
         conversationId: conversation.id,
